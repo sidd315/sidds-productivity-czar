@@ -84,7 +84,7 @@ export default function App() {
       if (ures?.data?.user?.email) setUserEmail(ures.data.user.email);
 
       // Load or prompt nickname
-      const prof = await getMyProfile().catch(() => null);
+      const prof = await getMyProfile(ures.data.user.id).catch(() => null);
       if (prof?.nickname) {
         setNickname(prof.nickname);
         document.title = `${prof.nickname}'s Productivity czar 🔨`;
