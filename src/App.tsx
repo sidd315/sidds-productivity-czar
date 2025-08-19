@@ -1,3 +1,4 @@
+// src/App.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
@@ -14,11 +15,13 @@ import Column from "./components/Column";
 import OverlayCard from "./components/OverlayCard";
 import TaskModal from "./components/TaskModal";
 import HabitTracker from "./components/HabitTracker";
+import NicknameModal from "./components/NicknameModal";
 
 // Supabase glue
 import { supabase } from "./lib/supabase";
 import { ensureBoard } from "./api/bootstrap";
 import { listTasks, createTask, updateTask, moveTask, computeNewPosition } from "./api/tasks";
+import { getMyProfile } from "./api/profile";
 
 // UI task type adds optional ordering position (from DB)
 type UITask = LocalTask & { position?: number };
@@ -42,6 +45,10 @@ export default function App() {
   // Current user (for profile menu)
   const [userEmail, setUserEmail] = useState<string>("");
   const [profileOpen, setProfileOpen] = useState(false);
+
+  // Nickname UX
+  const [nickname, setNickname] = useState<string>("");
+  const [nickModalOpen, setNickModalOpen] = useState(false);
 
   // UI state
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -73,8 +80,18 @@ export default function App() {
   // ---------- Bootstrap ----------
   useEffect(() => {
     (async () => {
-      const u = await supabase.auth.getUser();
-      if (u?.data?.user?.email) setUserEmail(u.data.user.email);
+      const ures = await supabase.auth.getUser();
+      if (ures?.data?.user?.email) setUserEmail(ures.data.user.email);
+
+      // Load or prompt nickname
+      const prof = await getMyProfile().catch(() => null);
+      if (prof?.nickname) {
+        setNickname(prof.nickname);
+        document.title = `${prof.nickname}'s Productivity czar 🔨`;
+      } else {
+        setNickModalOpen(true); // first time: ask for nickname
+        document.title = "Productivity czar 🔨";
+      }
 
       const { boardId: bid, columns } = await ensureBoard();
       setBoardId(bid);
@@ -82,6 +99,10 @@ export default function App() {
       await refresh(bid, columns);
     })();
   }, []);
+
+  useEffect(() => {
+    if (nickname) document.title = `${nickname}'s Productivity czar 🔨`;
+  }, [nickname]);
 
   async function refresh(bid = boardId, columns = colIds) {
     if (!bid) return;
@@ -383,7 +404,9 @@ export default function App() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <ListTodo className="h-7 w-7 text-neutral-700" />
-              <h1 className="text-xl font-bold tracking-tight text-neutral-900">Sidd&apos;s Productivity czar</h1>
+              <h1 className="text-xl font-bold tracking-tight text-neutral-900">
+                {nickname ? `${nickname}'s Productivity czar` : "Productivity czar"}
+              </h1>
             </div>
 
             <div className="flex items-center gap-2">
@@ -402,8 +425,11 @@ export default function App() {
 
               {/* Habit Tracker */}
               <button
-                onClick={() => setHabitOpen(true)}
-                className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-50"
+                onClick={() => ready && setHabitOpen(true)}
+                disabled={!ready}
+                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
+                  ready ? "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50" : "border-neutral-200 bg-white text-neutral-400 cursor-not-allowed"
+                }`}
                 title="Habit Tracker"
               >
                 <CalendarDays className="h-4 w-4" /> Habits
@@ -429,7 +455,16 @@ export default function App() {
                   <span className="hidden sm:inline">{userEmail || "Profile"}</span>
                 </button>
                 {profileOpen && (
-                  <div className="absolute right-0 mt-2 w-44 rounded-xl border border-neutral-200 bg-white shadow-lg">
+                  <div className="absolute right-0 mt-2 w-48 rounded-xl border border-neutral-200 bg-white shadow-lg">
+                    <button
+                      onClick={() => {
+                        setNickModalOpen(true);
+                        setProfileOpen(false);
+                      }}
+                      className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-50"
+                    >
+                      Edit nickname
+                    </button>
                     <button onClick={logout} className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-50">
                       Log out
                     </button>
@@ -618,6 +653,14 @@ export default function App() {
       {habitOpen && boardId && (
         <HabitTracker boardId={boardId} open={habitOpen} onClose={() => setHabitOpen(false)} />
       )}
+
+      {/* Nickname Modal */}
+      <NicknameModal
+        open={nickModalOpen}
+        onClose={() => setNickModalOpen(false)}
+        onSaved={(nick) => setNickname(nick)}
+        initial={nickname}
+      />
 
       {/* Global styles */}
       <style>{`html, body, #root { height: 100%; }`}</style>
