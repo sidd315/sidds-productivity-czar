@@ -1,32 +1,38 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
-import { Plus, ListTodo, SlidersHorizontal, Archive, User } from "lucide-react";
+import { Plus, ListTodo, SlidersHorizontal, Archive, User, CalendarDays } from "lucide-react";
 import confetti from "canvas-confetti";
 
-// v3.5.2 domain types & theme
+// Domain types & theme
 import type { BoardState, ColumnId, Priority, Task as LocalTask } from "./types";
 import { COLUMN_DEFS, META_BLUE, BG_SURFACE, SUGGESTED_TAGS } from "./types";
 
-// Existing helpers/components from v3.5.2
+// Helpers & components
 import { findColumnIdByTask, getTask } from "./utils";
 import Column from "./components/Column";
 import OverlayCard from "./components/OverlayCard";
 import TaskModal from "./components/TaskModal";
+import HabitTracker from "./components/HabitTracker";
 
 // Supabase glue
 import { supabase } from "./lib/supabase";
 import { ensureBoard } from "./api/bootstrap";
 import { listTasks, createTask, updateTask, moveTask, computeNewPosition } from "./api/tasks";
 
-// Local UI task type (adds DB ordering position)
+// UI task type adds optional ordering position (from DB)
 type UITask = LocalTask & { position?: number };
 
 export default function App() {
   // ---------- App State ----------
   const [state, setState] = useState<BoardState>(() => ({
-    pending: [], inprogress: [], action: [], done: [], archived: [], schedules: [] as any,
-  }) as BoardState);
+    pending: [],
+    inprogress: [],
+    action: [],
+    done: [],
+    archived: [],
+    schedules: [],
+  }));
 
   // Supabase ids
   const [boardId, setBoardId] = useState<string>("");
@@ -48,10 +54,18 @@ export default function App() {
   const [priorityFilter, setPriorityFilter] = useState<"All" | Priority>("All");
   const [dueFilter, setDueFilter] = useState<"all" | "today" | "week" | "overdue">("all");
 
-  // Archived modal
+  // Archived drawer
   const [showArchived, setShowArchived] = useState(false);
   const [archivedRows, setArchivedRows] = useState<any[]>([]);
   const [archivedLoading, setArchivedLoading] = useState(false);
+
+  // Subtasks modal
+  const [subtasksOpen, setSubtasksOpen] = useState(false);
+  const [subtasksTaskId, setSubtasksTaskId] = useState<string | null>(null);
+  const [subtasks, setSubtasks] = useState<Array<{ id: string; title: string; done: boolean }>>([]);
+
+  // Habit tracker popup
+  const [habitOpen, setHabitOpen] = useState(false);
 
   // DnD sensors
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -61,10 +75,11 @@ export default function App() {
     (async () => {
       const u = await supabase.auth.getUser();
       if (u?.data?.user?.email) setUserEmail(u.data.user.email);
-      const { boardId, columns } = await ensureBoard();
-      setBoardId(boardId);
+
+      const { boardId: bid, columns } = await ensureBoard();
+      setBoardId(bid);
       setColIds(columns);
-      await refresh(boardId, columns);
+      await refresh(bid, columns);
     })();
   }, []);
 
@@ -88,9 +103,9 @@ export default function App() {
         dueAt: r.due_at ? new Date(r.due_at).getTime() : null,
         priority: r.priority ?? undefined,
         tags: r.tags ?? [],
-        subtasks: [],
+        subtasks: [], // loaded separately by modal
         position: typeof r.position === "number" ? r.position : undefined,
-      } as UITask;
+      };
       byKey[key].push(t);
     }
     const sortByDue = (a: UITask, b: UITask) => (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity);
@@ -102,8 +117,8 @@ export default function App() {
       action: byKey.action,
       done: byKey.done,
       archived: [],
-      schedules: [] as any,
-    } as BoardState;
+      schedules: [],
+    };
   }
 
   const activeTask = useMemo(() => (activeId ? (getTask(state, activeId) as UITask) ?? null : null), [activeId, state]);
@@ -125,7 +140,13 @@ export default function App() {
   }
 
   // ---------- CRUD ----------
-  async function onAddTaskGlobal(values: { title: string; note?: string; priority: Priority; dueAt: number | null; tags?: string[] }) {
+  async function onAddTaskGlobal(values: {
+    title: string;
+    note?: string;
+    priority: Priority;
+    dueAt: number | null;
+    tags?: string[];
+  }) {
     if (!ready) {
       const res = await ensureBoard();
       setBoardId(res.boardId);
@@ -149,7 +170,13 @@ export default function App() {
     setModalOpen(true);
   }
 
-  async function onSaveEdit(values: { title: string; note?: string; priority: Priority; dueAt: number | null; tags?: string[] }) {
+  async function onSaveEdit(values: {
+    title: string;
+    note?: string;
+    priority: Priority;
+    dueAt: number | null;
+    tags?: string[];
+  }) {
     if (!editingId) return;
     await updateTask(editingId, {
       title: values.title,
@@ -169,10 +196,6 @@ export default function App() {
   }
 
   // ---------- Subtasks (CRUD) ----------
-  const [subtasksOpen, setSubtasksOpen] = useState(false);
-  const [subtasksTaskId, setSubtasksTaskId] = useState<string | null>(null);
-  const [subtasks, setSubtasks] = useState<Array<{ id: string; title: string; done: boolean }>>([]);
-
   async function openSubtasks(taskId: string) {
     setSubtasksTaskId(taskId);
     const { data, error } = await supabase
@@ -234,6 +257,18 @@ export default function App() {
     return out;
   }
 
+  const filteredState: BoardState = useMemo(() => {
+    const mapCol = (arr: UITask[]) => applyFilters(arr);
+    return {
+      pending: mapCol(state.pending as UITask[]),
+      inprogress: mapCol(state.inprogress as UITask[]),
+      action: mapCol(state.action as UITask[]),
+      done: mapCol(state.done as UITask[]),
+      archived: state.archived,
+      schedules: state.schedules,
+    };
+  }, [state, tagFilter, priorityFilter, dueFilter]);
+
   // ---------- DnD ----------
   function handleDragStart(event: any) {
     setActiveId(event.active.id as string);
@@ -267,7 +302,7 @@ export default function App() {
     try {
       await moveTask(active.id as string, { column_id: colIds[destKey], position: newPos });
       await refresh();
-    } catch (e) {
+    } catch {
       await refresh();
     }
   }
@@ -282,9 +317,7 @@ export default function App() {
     if (!fromCol) return prev;
 
     const columnIds = ["pending", "inprogress", "action", "done"] as ColumnId[];
-    let toCol: ColumnId | null = columnIds.includes(overId as ColumnId)
-      ? (overId as ColumnId)
-      : findColumnIdByTask(prev, overId);
+    let toCol: ColumnId | null = columnIds.includes(overId as ColumnId) ? (overId as ColumnId) : findColumnIdByTask(prev, overId);
     if (!toCol) return prev;
 
     if (fromCol === toCol) {
@@ -308,7 +341,6 @@ export default function App() {
 
   // ---------- Archived ----------
   async function openArchived() {
-    // Open first so the user sees the drawer even if fetch is slow
     setShowArchived(true);
     setArchivedLoading(true);
     try {
@@ -319,15 +351,13 @@ export default function App() {
         setBoardId(res.boardId);
         setColIds(res.columns);
       }
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("tasks")
         .select("*")
         .eq("board_id", bid!)
         .eq("archived", true)
         .order("created_at", { ascending: false });
-      setArchivedRows(error ? [] : (data ?? []));
-    } catch (e) {
-      setArchivedRows([]);
+      setArchivedRows(data ?? []);
     } finally {
       setArchivedLoading(false);
     }
@@ -345,18 +375,6 @@ export default function App() {
   }
 
   // ---------- Render ----------
-  const filteredState: BoardState = useMemo(() => {
-    const mapCol = (arr: UITask[]) => applyFilters(arr);
-    return {
-      pending: mapCol(state.pending as UITask[]),
-      inprogress: mapCol(state.inprogress as UITask[]),
-      action: mapCol(state.action as UITask[]),
-      done: mapCol(state.done as UITask[]),
-      archived: state.archived,
-      schedules: state.schedules,
-    } as BoardState;
-  }, [state, tagFilter, priorityFilter, dueFilter]);
-
   return (
     <div className="min-h-screen w-full" style={{ background: BG_SURFACE }}>
       {/* Header */}
@@ -365,17 +383,30 @@ export default function App() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <ListTodo className="h-7 w-7 text-neutral-700" />
-              <h1 className="text-xl font-bold tracking-tight text-neutral-900">Sidd's Productivity czar</h1>
+              <h1 className="text-xl font-bold tracking-tight text-neutral-900">Sidd&apos;s Productivity czar</h1>
             </div>
+
             <div className="flex items-center gap-2">
+              {/* Add Task */}
               <button
                 onClick={() => setModalOpen(true)}
                 disabled={!ready}
-                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-white shadow-sm ${ready ? "bg-[var(--btn)] hover:opacity-95" : "bg-neutral-300 cursor-not-allowed"}`}
+                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-white shadow-sm ${
+                  ready ? "bg-[var(--btn)] hover:opacity-95" : "bg-neutral-300 cursor-not-allowed"
+                }`}
                 style={{ ["--btn" as any]: META_BLUE }}
                 title={ready ? "Add task" : "Initializing..."}
               >
                 <Plus className="h-4 w-4" /> Add task
+              </button>
+
+              {/* Habit Tracker */}
+              <button
+                onClick={() => setHabitOpen(true)}
+                className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-50"
+                title="Habit Tracker"
+              >
+                <CalendarDays className="h-4 w-4" /> Habits
               </button>
 
               {/* Extras toggle */}
@@ -399,7 +430,9 @@ export default function App() {
                 </button>
                 {profileOpen && (
                   <div className="absolute right-0 mt-2 w-44 rounded-xl border border-neutral-200 bg-white shadow-lg">
-                    <button onClick={logout} className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-50">Log out</button>
+                    <button onClick={logout} className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-50">
+                      Log out
+                    </button>
                   </div>
                 )}
               </div>
@@ -419,7 +452,9 @@ export default function App() {
                     <button
                       key={t}
                       onClick={() => toggleTag(t)}
-                      className={`rounded-full border px-2 py-0.5 text-xs ${tagFilter.includes(t) ? "bg-blue-50 border-blue-200 text-blue-700" : "bg-white border-neutral-200 text-neutral-700"}`}
+                      className={`rounded-full border px-2 py-0.5 text-xs ${
+                        tagFilter.includes(t) ? "bg-blue-50 border-blue-200 text-blue-700" : "bg-white border-neutral-200 text-neutral-700"
+                      }`}
                     >
                       {t}
                     </button>
@@ -429,7 +464,11 @@ export default function App() {
                 {/* Priority filter */}
                 <div className="flex items-center gap-2">
                   <label className="text-xs text-neutral-600">Priority</label>
-                  <select className="rounded-lg border border-neutral-200 px-2 py-1 text-sm" value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value as any)}>
+                  <select
+                    className="rounded-lg border border-neutral-200 px-2 py-1 text-sm"
+                    value={priorityFilter}
+                    onChange={(e) => setPriorityFilter(e.target.value as any)}
+                  >
                     <option>All</option>
                     <option>Urgent</option>
                     <option>Important</option>
@@ -440,7 +479,11 @@ export default function App() {
                 {/* Due filter */}
                 <div className="flex items-center gap-2">
                   <label className="text-xs text-neutral-600">Due</label>
-                  <select className="rounded-lg border border-neutral-200 px-2 py-1 text-sm" value={dueFilter} onChange={(e) => setDueFilter(e.target.value as any)}>
+                  <select
+                    className="rounded-lg border border-neutral-200 px-2 py-1 text-sm"
+                    value={dueFilter}
+                    onChange={(e) => setDueFilter(e.target.value as any)}
+                  >
                     <option value="all">All</option>
                     <option value="today">Today</option>
                     <option value="week">This week</option>
@@ -463,7 +506,11 @@ export default function App() {
                 <div className="flex-1" />
 
                 {/* Archived */}
-                <button onClick={openArchived} className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-50" title="Archived tasks">
+                <button
+                  onClick={openArchived}
+                  className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-50"
+                  title="Archived tasks"
+                >
                   <Archive className="h-4 w-4" /> Archived Tasks
                 </button>
               </div>
@@ -506,44 +553,12 @@ export default function App() {
       <TaskModal
         open={modalOpen}
         initial={editingTask}
-        onClose={() => { setModalOpen(false); setEditingId(null); }}
+        onClose={() => {
+          setModalOpen(false);
+          setEditingId(null);
+        }}
         onSubmit={(vals: any) => (editingTask ? onSaveEdit(vals) : onAddTaskGlobal(vals))}
       />
-
-      {/* Archived Drawer */}
-      {showArchived && (
-        <div className="fixed inset-0 z-50">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowArchived(false)} />
-          <div className="absolute right-0 top-0 h-full w-[min(520px,92vw)] bg-white shadow-2xl p-5 overflow-y-auto">
-            <div className="mb-4 flex items-center justify-between">
-              <div className="text-lg font-semibold text-neutral-900">Archived Tasks</div>
-              <button className="rounded-lg border px-2 py-1 text-sm" onClick={() => setShowArchived(false)}>Close</button>
-            </div>
-            <div className="space-y-3">
-              {archivedLoading && <div className="text-sm text-neutral-500">Loading…</div>}
-              {!archivedLoading && archivedRows.length === 0 && (
-                <div className="text-sm text-neutral-500">No archived tasks.</div>
-              )}
-              {!archivedLoading && archivedRows.map((r) => (
-                <div key={r.id} className="rounded-xl border border-neutral-200 bg-white p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="font-medium">{r.title}</div>
-                      {r.note && <div className="text-sm text-neutral-600">{r.note}</div>}
-                    </div>
-                    <button
-                      className="rounded-lg border border-neutral-200 bg-white px-2 py-1 text-sm hover:bg-neutral-50"
-                      onClick={() => restoreTask(r.id)}
-                    >
-                      Restore
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Subtasks Modal */}
       {subtasksOpen && (
@@ -552,11 +567,56 @@ export default function App() {
           <div className="absolute left-1/2 top-1/2 w-[min(560px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
               <div className="text-lg font-semibold text-neutral-900">Subtasks</div>
-              <button className="rounded-lg border px-2 py-1 text-sm" onClick={() => setSubtasksOpen(false)}>Close</button>
+              <button className="rounded-lg border px-2 py-1 text-sm" onClick={() => setSubtasksOpen(false)}>
+                Close
+              </button>
             </div>
             <SubtasksEditor items={subtasks} onToggle={toggleSubtask} onRemove={removeSubtask} onAdd={addSubtask} />
           </div>
         </div>
+      )}
+
+      {/* Archived Drawer */}
+      {showArchived && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setShowArchived(false)} />
+          <div className="absolute right-0 top-0 h-full w-[min(520px,92vw)] bg-white shadow-2xl p-5 overflow-y-auto">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="text-lg font-semibold text-neutral-900">Archived Tasks</div>
+              <button className="rounded-lg border px-2 py-1 text-sm" onClick={() => setShowArchived(false)}>
+                Close
+              </button>
+            </div>
+            <div className="space-y-3">
+              {archivedLoading && <div className="text-sm text-neutral-500">Loading…</div>}
+              {!archivedLoading && archivedRows.length === 0 && (
+                <div className="text-sm text-neutral-500">No archived tasks.</div>
+              )}
+              {!archivedLoading &&
+                archivedRows.map((r) => (
+                  <div key={r.id} className="rounded-xl border border-neutral-200 bg-white p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-medium">{r.title}</div>
+                        {r.note && <div className="text-sm text-neutral-600">{r.note}</div>}
+                      </div>
+                      <button
+                        className="rounded-lg border border-neutral-200 bg-white px-2 py-1 text-sm hover:bg-neutral-50"
+                        onClick={() => restoreTask(r.id)}
+                      >
+                        Restore
+                      </button>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Habit Tracker (opens above everything) */}
+      {habitOpen && boardId && (
+        <HabitTracker boardId={boardId} open={habitOpen} onClose={() => setHabitOpen(false)} />
       )}
 
       {/* Global styles */}
@@ -593,7 +653,12 @@ function SubtasksEditor({
               className="h-4 w-4"
             />
             <span className={`flex-1 text-sm ${s.done ? "line-through text-neutral-400" : "text-neutral-800"}`}>{s.title}</span>
-            <button className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50" onClick={() => onRemove(s.id)}>Delete</button>
+            <button
+              className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50"
+              onClick={() => onRemove(s.id)}
+            >
+              Delete
+            </button>
           </label>
         ))}
         {items.length === 0 && <div className="text-sm text-neutral-500">No subtasks yet.</div>}
