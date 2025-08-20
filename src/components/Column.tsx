@@ -64,7 +64,7 @@ function SortableTaskCard({
               <span className="inline-flex items-center gap-1 rounded-full bg-red-600/10 px-2 py-0.5 text-[11px] text-red-700">Overdue</span>
             )}
           </div>
-          {task.note && <div className="mt-1 text-sm text-neutral-600 break-words">{task.note}</div>}
+      
 
           {/* Tags */}
           {Array.isArray((task as any).tags) && (task as any).tags.length > 0 && (

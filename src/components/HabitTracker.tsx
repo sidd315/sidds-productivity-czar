@@ -43,6 +43,7 @@ export default function HabitTracker({
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [confirmingId, setConfirmingId] = useState<string | null>(null); // double-confirm delete
+  const [now, setNow] = useState(Date.now());
 
   // Draggable popup state
   const popupRef = useRef<HTMLDivElement | null>(null);
@@ -59,6 +60,27 @@ export default function HabitTracker({
     if (!open || !boardId) return;
     void refresh();
   }, [open, boardId]);
+
+  useEffect(() => {
+  if (!open) return;
+  const id = setInterval(() => setNow(Date.now()), 1000);
+  return () => clearInterval(id);
+  }, [open]);
+
+  function timeLeftToday(): string {
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+    let ms = end.getTime() - now;
+    if (ms < 0) ms = 0;
+    const hh = Math.floor(ms / 3600000);
+    ms %= 3600000;
+    const mm = Math.floor(ms / 60000);
+    ms %= 60000;
+    const ss = Math.floor(ms / 1000);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${pad(hh)}:${pad(mm)}:${pad(ss)}`;
+  }
+
 
   async function refresh() {
     if (!boardId) return;
@@ -89,11 +111,15 @@ export default function HabitTracker({
   }
 
   // --- Streak helpers ---
-  function ymd(date: Date): string {
-    const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-    return d.toISOString().slice(0, 10);
-  }
-  const todayUTC = () => ymd(new Date());
+    // NEW: local YYYY-MM-DD (no timezone shifting)
+    function ymdLocal(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+    }
+    const todayLocal = () => ymdLocal(new Date());
+
 
   const logMap = useMemo(() => {
     const m = new Map<string, Set<string>>();
@@ -104,26 +130,32 @@ export default function HabitTracker({
     return m;
   }, [logs]);
 
-  function currentStreak(habitId: string): number {
+    function currentStreak(habitId: string): number {
     const days = logMap.get(habitId) ?? new Set<string>();
     if (!days.size) return 0;
+
     let streak = 0;
-    let cursor = new Date();
-    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate()));
+    let cursor = new Date(); // local now
+    // zero time to local midnight for today and count back
+    cursor.setHours(0, 0, 0, 0);
+
     while (true) {
-      const key = cursor.toISOString().slice(0, 10);
-      if (days.has(key)) {
+        const key = ymdLocal(cursor);
+        if (days.has(key)) {
         streak += 1;
-        cursor.setUTCDate(cursor.getUTCDate() - 1);
-      } else break;
+        cursor.setDate(cursor.getDate() - 1); // go to previous local day
+        } else {
+        break;
+        }
     }
     return streak;
-  }
+    }
+
 
   async function toggleToday(h: HabitRow) {
     if (!boardId) return;
     setErrorMsg("");
-    const t = todayUTC();
+    const t = todayLocal()
     const set = logMap.get(h.id) ?? new Set<string>();
     try {
       if (set.has(t)) {
@@ -305,7 +337,7 @@ export default function HabitTracker({
               )}
               {activeHabits.map((h) => {
                 const streak = currentStreak(h.id);
-                const doneToday = (logMap.get(h.id) ?? new Set()).has(todayUTC());
+                const doneToday = (logMap.get(h.id) ?? new Set()).has(todayLocal());
                 const isConfirm = confirmingId === h.id;
                 return (
                   <div key={h.id} className="rounded-xl border border-neutral-200 bg-white p-3">
@@ -327,6 +359,9 @@ export default function HabitTracker({
                         <div className="mt-1 text-xs text-neutral-500">Created {new Date(h.created_at).toLocaleDateString()}</div>
                       </div>
                       <div className="flex items-center gap-2">
+                        <span className="text-xs text-neutral-500">
+                            Time left today: {timeLeftToday()}
+                        </span>
                         <button
                           onClick={() => toggleToday(h)}
                           className={`rounded-lg px-3 py-1.5 text-sm ${
