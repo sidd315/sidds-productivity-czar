@@ -1,7 +1,14 @@
 // src/App.tsx
 import React, { useEffect, useMemo, useState } from "react";
-
-import { DndContext, DragOverlay, PointerSensor, MouseSensor, TouchSensor,pointerWithin, useSensor, useSensors } from "@dnd-kit/core";
+import {
+  DndContext,
+  DragOverlay,
+  useSensor,
+  useSensors,
+  MouseSensor,
+  TouchSensor,
+  pointerWithin,
+} from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
 import { Plus, ListTodo, SlidersHorizontal, Archive, User, CalendarDays } from "lucide-react";
 import confetti from "canvas-confetti";
@@ -75,11 +82,32 @@ export default function App() {
   // Habit tracker popup
   const [habitOpen, setHabitOpen] = useState(false);
 
-  // DnD sensors
-  
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  // --------- Mobile-only UX ---------
+  const [isMobile, setIsMobile] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [collapsedCols, setCollapsedCols] = useState<Record<ColumnId, boolean>>({
+    pending: true,
+    inprogress: true,
+    action: true,
+    done: true,
+  });
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767.98px)");
+    const apply = () => setIsMobile(mq.matches);
+    apply();
+    mq.addEventListener?.("change", apply);
+    return () => mq.removeEventListener?.("change", apply);
+  }, []);
+
+  function toggleCol(id: ColumnId) {
+    setCollapsedCols((c) => ({ ...c, [id]: !c[id] }));
+  }
+
+  // ---------- DnD sensors ----------
+  const sensors = useSensors(
     useSensor(TouchSensor, { activationConstraint: { delay: 120, tolerance: 8 } }),
-    useSensor(MouseSensor,  { activationConstraint: { distance: 5 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } })
   );
 
   // ---------- Bootstrap ----------
@@ -90,6 +118,7 @@ export default function App() {
 
       // Load or prompt nickname
       const prof = await getMyProfile(ures.data.user.id).catch(() => null);
+
       if (prof?.nickname) {
         setNickname(prof.nickname);
         document.title = `${prof.nickname}'s Productivity czar 🔨`;
@@ -300,24 +329,38 @@ export default function App() {
     setActiveId(event.active.id as string);
   }
 
+  function normalizeOverId(overId: string): ColumnId | string {
+    // Map "<col>-header" / "<col>-body" back to "<col>"
+    if (overId.endsWith("-header") || overId.endsWith("-body")) {
+      return overId.replace(/-(header|body)$/, "") as ColumnId;
+    }
+    return overId;
+  }
+
   async function handleDragEnd(event: any) {
     const { active, over } = event;
     setActiveId(null);
     if (!over) return;
 
+    const normalizedOverId = normalizeOverId(over.id as string);
+
     // Optimistic local update
-    const nextState = computeDnDLocal(state, active.id as string, over.id as string, (fromCol, toCol) => {
+    const nextState = computeDnDLocal(state, active.id as string, normalizedOverId as string, (fromCol, toCol) => {
       if (toCol === "done" && fromCol !== "done") {
-        confetti({ particleCount: 120, spread: 70, origin: { y: 0.2 } });
-        setTimeout(() => confetti({ particleCount: 80, spread: 60, origin: { y: 0.2, x: 0.8 } }), 150);
+        const isTouch = window.matchMedia?.("(pointer: coarse)").matches;
+        confetti({ particleCount: isTouch ? 60 : 120, spread: 70, origin: { y: 0.2 } });
+        setTimeout(
+          () => confetti({ particleCount: isTouch ? 40 : 80, spread: 60, origin: { y: 0.2, x: 0.8 } }),
+          150
+        );
       }
     });
     setState(nextState);
 
     // Persist move with fractional positioning
-    const destKey: ColumnId = (COLUMN_DEFS.map((c) => c.id) as ColumnId[]).includes(over.id as ColumnId)
-      ? (over.id as ColumnId)
-      : (findColumnIdByTask(nextState, over.id as string) as ColumnId);
+    const destKey: ColumnId = (COLUMN_DEFS.map((c) => c.id) as ColumnId[]).includes(normalizedOverId as ColumnId)
+      ? (normalizedOverId as ColumnId)
+      : (findColumnIdByTask(nextState, normalizedOverId as string) as ColumnId);
 
     const destTasks = (nextState as any)[destKey] as UITask[];
     const idx = destTasks.findIndex((t) => t.id === active.id);
@@ -414,73 +457,95 @@ export default function App() {
               </h1>
             </div>
 
+            {/* Right side controls */}
             <div className="flex items-center gap-2">
-              {/* Add Task */}
-              <button
-                onClick={() => setModalOpen(true)}
-                disabled={!ready}
-                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-white shadow-sm ${
-                  ready ? "bg-[var(--btn)] hover:opacity-95" : "bg-neutral-300 cursor-not-allowed"
-                }`}
-                style={{ ["--btn" as any]: META_BLUE }}
-                title={ready ? "Add task" : "Initializing..."}
-              >
-                <Plus className="h-4 w-4" /> Add task
-              </button>
+              {/* Desktop: normal buttons */}
+              {!isMobile && (
+                <>
+                  {/* Add Task */}
+                  <button
+                    onClick={() => setModalOpen(true)}
+                    disabled={!ready}
+                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-white shadow-sm ${
+                      ready ? "bg-[var(--btn)] hover:opacity-95" : "bg-neutral-300 cursor-not-allowed"
+                    }`}
+                    style={{ ["--btn" as any]: META_BLUE }}
+                    title={ready ? "Add task" : "Initializing..."}
+                  >
+                    <Plus className="h-4 w-4" /> Add task
+                  </button>
 
-              {/* Habit Tracker */}
-              <button
-                onClick={() => ready && setHabitOpen(true)}
-                disabled={!ready}
-                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
-                  ready ? "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50" : "border-neutral-200 bg-white text-neutral-400 cursor-not-allowed"
-                }`}
-                title="Habit Tracker"
-              >
-                <CalendarDays className="h-4 w-4" /> Habits
-              </button>
+                  {/* Habit Tracker */}
+                  <button
+                    onClick={() => ready && setHabitOpen(true)}
+                    disabled={!ready}
+                    className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
+                      ready
+                        ? "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50"
+                        : "border-neutral-200 bg-white text-neutral-400 cursor-not-allowed"
+                    }`}
+                    title="Habit Tracker"
+                  >
+                    <CalendarDays className="h-4 w-4" /> Habits
+                  </button>
 
-              {/* Extras toggle */}
-              <button
-                onClick={() => setShowExtras((v) => !v)}
-                className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-50"
-                title="Extras"
-              >
-                <SlidersHorizontal className="h-4 w-4" /> Extras
-              </button>
+                  {/* Extras toggle */}
+                  <button
+                    onClick={() => setShowExtras((v) => !v)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-50"
+                    title="Extras"
+                  >
+                    <SlidersHorizontal className="h-4 w-4" /> Extras
+                  </button>
 
-              {/* Profile menu */}
-              <div className="relative">
-                <button
-                  onClick={() => setProfileOpen((v) => !v)}
-                  className="inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
-                  title="Profile"
-                >
-                  <User className="h-4 w-4" />
-                  <span className="hidden sm:inline">{userEmail || "Profile"}</span>
-                </button>
-                {profileOpen && (
-                  <div className="absolute right-0 mt-2 w-48 rounded-xl border border-neutral-200 bg-white shadow-lg">
+                  {/* Profile menu */}
+                  <div className="relative">
                     <button
-                      onClick={() => {
-                        setNickModalOpen(true);
-                        setProfileOpen(false);
-                      }}
-                      className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-50"
+                      onClick={() => setProfileOpen((v) => !v)}
+                      className="inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
+                      title="Profile"
                     >
-                      Edit nickname
+                      <User className="h-4 w-4" />
+                      <span className="hidden sm:inline">{userEmail || "Profile"}</span>
                     </button>
-                    <button onClick={logout} className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-50">
-                      Log out
-                    </button>
+                    {profileOpen && (
+                      <div className="absolute right-0 mt-2 w-48 rounded-xl border border-neutral-200 bg-white shadow-lg">
+                        <button
+                          onClick={() => {
+                            setNickModalOpen(true);
+                            setProfileOpen(false);
+                          }}
+                          className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-50"
+                        >
+                          Edit nickname
+                        </button>
+                        <button onClick={logout} className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-50">
+                          Log out
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                </>
+              )}
+
+              {/* Mobile: only hamburger (menu) in header; Add is a FAB below */}
+              {isMobile && (
+                <button
+                  onClick={() => setMobileMenuOpen(true)}
+                  className="inline-flex flex-col items-center justify-center rounded-xl border border-neutral-200 bg-white p-2 text-neutral-800 hover:bg-neutral-50"
+                  aria-label="Menu"
+                  title="Menu"
+                >
+                  <span className="inline-block h-0.5 w-5 bg-neutral-800" />
+                  <span className="mt-1 inline-block h-0.5 w-5 bg-neutral-800" />
+                  <span className="mt-1 inline-block h-0.5 w-5 bg-neutral-800" />
+                </button>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Extras panel */}
+        {/* Extras panel (desktop only, or if you open it via mobile menu we keep it visible) */}
         {showExtras && (
           <div className="border-t border-neutral-200/70 bg-white/95">
             <div className="mx-auto max-w-7xl px-4 py-3">
@@ -562,21 +627,44 @@ export default function App() {
       {/* Board */}
       <main className="mx-auto max-w-7xl px-4 py-6">
         <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-            {COLUMN_DEFS.map((col) => (
-              <div key={col.id} className="min-h-0 h-[85vh]">
-                <Column
-                  id={col.id as ColumnId}
-                  title={col.title}
-                  accent={col.accent}
-                  tasks={(filteredState as any)[col.id] as UITask[]}
-                  onDeleteTask={onDeleteTask}
-                  onEditTask={onEditTask}
-                  onOpenSubtasks={openSubtasks}
-                />
-              </div>
-            ))}
-          </div>
+          {/* Mobile: stacked, collapsible columns */}
+          {isMobile ? (
+            <div className="flex flex-col gap-4">
+              {COLUMN_DEFS.map((col) => (
+                <div key={col.id}>
+                  <Column
+                    id={col.id as ColumnId}
+                    title={col.title}
+                    accent={col.accent}
+                    tasks={(filteredState as any)[col.id]}
+                    isMobile
+                    collapsed={collapsedCols[col.id as ColumnId]}
+                    onToggle={toggleCol}
+                    onDeleteTask={onDeleteTask}
+                    onEditTask={onEditTask}
+                    onOpenSubtasks={openSubtasks}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            // Desktop: multi-column grid
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+              {COLUMN_DEFS.map((col) => (
+                <div key={col.id} className="min-h-0 h-[85vh]">
+                  <Column
+                    id={col.id as ColumnId}
+                    title={col.title}
+                    accent={col.accent}
+                    tasks={(filteredState as any)[col.id]}
+                    onDeleteTask={onDeleteTask}
+                    onEditTask={onEditTask}
+                    onOpenSubtasks={openSubtasks}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
 
           <DragOverlay dropAnimation={{ duration: 180 }}>
             <OverlayCard task={(activeTask as any) ?? null} />
@@ -588,6 +676,69 @@ export default function App() {
       <footer className="mx-auto max-w-7xl px-4 pb-8 text-center text-xs text-neutral-500">
         Connected to Supabase · Per-user boards · Extras for filters/archived · Click avatar to log out
       </footer>
+
+      {/* Mobile FAB: Add Task */}
+      {isMobile && (
+        <button
+          onClick={() => setModalOpen(true)}
+          disabled={!ready}
+          className={`fixed bottom-5 right-5 z-40 h-12 w-12 rounded-full text-white shadow-lg hover:opacity-95 ${
+            ready ? "bg-blue-600" : "bg-neutral-300 cursor-not-allowed"
+          }`}
+          aria-label="Add task"
+          title={ready ? "Add task" : "Initializing..."}
+        >
+          <span className="text-2xl leading-none">+</span>
+        </button>
+      )}
+
+      {/* Mobile menu sheet */}
+      {isMobile && mobileMenuOpen && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setMobileMenuOpen(false)} />
+          <div className="absolute right-0 top-0 h-full w-[75vw] max-w-[360px] bg-white shadow-2xl p-5">
+            <div className="mb-4 text-lg font-semibold">Menu</div>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  setShowExtras(true);
+                  setMobileMenuOpen(false);
+                }}
+                className="rounded-lg border px-3 py-2 text-left"
+              >
+                Extras
+              </button>
+              <button
+                onClick={() => {
+                  openArchived();
+                  setMobileMenuOpen(false);
+                }}
+                className="rounded-lg border px-3 py-2 text-left"
+              >
+                Archived Tasks
+              </button>
+              <button
+                onClick={() => {
+                  setHabitOpen(true);
+                  setMobileMenuOpen(false);
+                }}
+                className="rounded-lg border px-3 py-2 text-left"
+              >
+                Habits
+              </button>
+              <button
+                onClick={() => {
+                  setProfileOpen(true);
+                  setMobileMenuOpen(false);
+                }}
+                className="rounded-lg border px-3 py-2 text-left"
+              >
+                Profile / Logout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Task Modal */}
       <TaskModal
@@ -604,7 +755,13 @@ export default function App() {
       {subtasksOpen && (
         <div className="fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/30" onClick={() => setSubtasksOpen(false)} />
-          <div className="absolute left-1/2 top-1/2 w-[min(560px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-2xl">
+          <div
+            className={`
+              absolute bg-white shadow-2xl
+              md:left-1/2 md:top-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:w-[min(560px,92vw)] md:rounded-2xl md:p-5
+              left-0 right-0 bottom-0 h-[85vh] rounded-t-2xl p-5
+            `}
+          >
             <div className="mb-4 flex items-center justify-between">
               <div className="text-lg font-semibold text-neutral-900">Subtasks</div>
               <button className="rounded-lg border px-2 py-1 text-sm" onClick={() => setSubtasksOpen(false)}>
@@ -655,9 +812,7 @@ export default function App() {
       )}
 
       {/* Habit Tracker (opens above everything) */}
-      {habitOpen && boardId && (
-        <HabitTracker boardId={boardId} open={habitOpen} onClose={() => setHabitOpen(false)} />
-      )}
+      {habitOpen && boardId && <HabitTracker boardId={boardId} open={habitOpen} onClose={() => setHabitOpen(false)} />}
 
       {/* Nickname Modal */}
       <NicknameModal
@@ -694,12 +849,7 @@ function SubtasksEditor({
       <div className="space-y-2 max-h-[48vh] overflow-y-auto pr-1">
         {items.map((s) => (
           <label key={s.id} className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white p-2">
-            <input
-              type="checkbox"
-              checked={s.done}
-              onChange={(e) => onToggle(s.id, e.target.checked)}
-              className="h-4 w-4"
-            />
+            <input type="checkbox" checked={s.done} onChange={(e) => onToggle(s.id, e.target.checked)} className="h-4 w-4" />
             <span className={`flex-1 text-sm ${s.done ? "line-through text-neutral-400" : "text-neutral-800"}`}>{s.title}</span>
             <button
               className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50"
