@@ -1,6 +1,7 @@
 // src/App.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors } from "@dnd-kit/core";
+
+import { DndContext, DragOverlay, PointerSensor, MouseSensor, TouchSensor,pointerWithin, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
 import { Plus, ListTodo, SlidersHorizontal, Archive, User, CalendarDays } from "lucide-react";
 import confetti from "canvas-confetti";
@@ -75,7 +76,11 @@ export default function App() {
   const [habitOpen, setHabitOpen] = useState(false);
 
   // DnD sensors
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 120, tolerance: 8 } }),
+    useSensor(MouseSensor,  { activationConstraint: { distance: 5 } }),
+  );
 
   // ---------- Bootstrap ----------
   useEffect(() => {
